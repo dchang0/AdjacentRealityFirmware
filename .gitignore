@@ -17,13 +17,6 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
-# Microchip Studio / Visual Studio
-.vs/
-Debug/
-*.atsuo
-*.atsln
-*.componentinfo.xml
-
 # OSX
 # =========================
 
