@@ -101,7 +101,7 @@ void modeAutotune() {
 		// and trigger drum samples from the LDR-driven timer
 		state.flags.pitchBendActive = true;
 		if (!state.flags.cueToneActive) {
-			state.octaveOffset = (state.lightLevel >> 7);  // 0 or 1
+			state.octaveOffset = (state.lightLevel >> 7);  // 0..4
 		}
 		playDrumSample(state.drumTimer, state.drumPatternIndex);
 		state.drumTimer++;
@@ -110,7 +110,7 @@ void modeAutotune() {
 		// ANTIMATTER held: octave or decay control via LDR
 		if (state.decayMode < 3) {
 			if (!state.flags.cueToneActive) {
-				state.octaveOffset = (state.lightLevel >> 7);  // 0 or 1
+				state.octaveOffset = (state.lightLevel >> 7);  // 0..4
 			}
 		}
 		else {
@@ -184,8 +184,15 @@ void modeAutotune() {
 void modeRecordMelody() {
 	if (state.flags.modeFirstRun) {
 		if (!state.flags.preserveUserMelody) {
+			// Re-roll a fresh song rather than wiping to silence. The manual
+			// promises a new random composition on every mode change, and an
+			// empty Chords[]/ChordsB[] left the unit with literally nothing
+			// to play whenever the boot mode had disabled the drum generator
+			// (MATTER master, or slave locked on the drum pin) — a dead unit
+			// that only a power cycle could revive.
 			clearMelodyPattern();
-			clearBassPattern();
+			generateMelodyPattern();
+			generateBassPattern();
 		}
 		state.flags.drumsMuted = false;
 		state.flags.playing = true;

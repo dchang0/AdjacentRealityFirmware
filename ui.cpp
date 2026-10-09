@@ -161,6 +161,13 @@ void handleModeTransition() {
 			Amp[0] = 0; Amp[1] = 0; Amp[2] = 0; Amp[3] = 0;
 			// Reset synth state before playing the cue tone
 			state.distortionAmount = 0;
+			// Autotune's LDR octave mapping writes lightLevel >> 7, which reaches
+			// 4 (not the "0 or 1" the comment claims) — and the button race during
+			// the press runs modeAutotune with only MATTER held, so it lands right
+			// before this transition.  Nothing in mode 2 resets it, so every note
+			// then plays 4 octaves up (Scale[31]>>1 << 4 = 32640 = ~10 kHz) — a
+			// near-ultrasonic, near-silent whine.  Return to the documented default.
+			state.octaveOffset = 2;
 			state.flags.playing = false;
 			// Freeze pitchBend for the cue tone: clear pitchBendActive so
 			// readInputs() sets pitchBend to 0, and set noteDecay to a safe
@@ -178,17 +185,26 @@ void handleModeTransition() {
 			// The blocking delay loop is fine here — the cue tone plays
 			// through the 20kHz ISR independently of the main loop.
 			uint8_t nextMode = (state.mode + 1) % NUM_MODES;
+			// 40 ms per half-period: ~250 ms of blinks total, which is what
+			// the watchdog-reset comment below assumes. The old 80-iteration
+			// busy loop lasted ~120 us per half-period — invisible, so the
+			// gesture looked like it did nothing.
 			for (uint8_t i = 0; i <= nextMode; i++) {
 				hal_drum_write(DRUM_SYNC_MASK, DRUM_SYNC_MASK);
-				for (volatile uint8_t d = 0; d < 80; d++);
+				_delay_ms(40);
 				hal_drum_write(DRUM_SYNC_MASK, 0);
-				for (volatile uint8_t d = 0; d < 80; d++);
+				_delay_ms(40);
 			}
 		}
 	}
 
-	// Both buttons released — complete the transition
-	if (state.flags.bothButtonsHeld && !(state.flags.button1 || state.flags.button2)) {
+	// Both buttons released — complete the transition.
+	// Fires as soon as EITHER button is down (i.e. once they are no longer
+	// both held).  The old condition required both to read low, so a single
+	// stuck or floating input kept bothButtonsHeld latched forever:
+	// transitioning stayed true, selectMode() never ran a mode function and
+	// the unit locked up until RESET.
+	if (state.flags.bothButtonsHeld && !(state.flags.button1 && state.flags.button2)) {
 		state.flags.bothButtonsHeld = false;
 		state.flags.transitioning = false;
 		state.mode++;
@@ -218,6 +234,12 @@ void handleModeTransition() {
 		state.flags.receivingSync = false;
 		state.flags.sendingSync = false;
 		state.syncOutputPin = 0;
+		// Drop any tick the WDT ISR queued before sendingSync went false.
+		// loop() would otherwise write that stale tick to syncOutputPin==0,
+		// and digitalWrite(0, ...) clears PORTB0 — MATTER's input pull-up —
+		// leaving the button floating. It then reads as pressed forever, so
+		// this release branch never fires again and the firmware locks up.
+		state.flags.syncTickPending = false;
 		// Reset WDT counter so the new mode's tempo starts clean.
 		// During the ~250 ms LED blink the WDT kept incrementing the
 		// counter even though playing was false.  Without this reset

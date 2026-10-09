@@ -298,14 +298,15 @@ void setup() {
 			else {
 				lockCount = 0;
 			}
-			delay(5);
 			waitCount++;
-			delay(5);
+			_delay_ms(10);
 		}
 		if (state.syncOutputPin == 0) {
+			// No clock arrived: the manual promises a normal Autotune master,
+			// so drums stay on. Neither pin carries sync here.
 			pinMode(TONE_PIN, OUTPUT);
 			pinMode(DRUM_PIN, OUTPUT);
-			state.flags.drumsEnabled = false;
+			state.flags.drumsEnabled = true;
 			state.drumMask = DRUM_SYNC_MASK;
 		}
 	}
@@ -326,6 +327,17 @@ void setup() {
 	}
 	// Neither button: NORMAL BOOT — Autotune mode, no sync
 	else {
+	}
+
+	// Consume the boot-time button hold. setup() returns with the buttons
+	// still pressed, so loop() would see "both pressed, then both released"
+	// and immediately fire handleModeTransition() — advancing mode 1 -> 2
+	// the instant the user lets go of the boot gesture. Bounded so a
+	// mechanically stuck button cannot hang here forever.
+	uint16_t bootHold = BUTTON_STUCK_TIMEOUT;
+	while (bootHold && (!digitalRead(BTN_1) || !digitalRead(BTN_2))) {
+		_delay_ms(5);
+		bootHold--;
 	}
 
 	// --- RANDOM SEED ---
@@ -400,8 +412,9 @@ void loop() {
 			// Sync via PWM duty cycle (for RING output on shared pin)
 			hal_set_pwm_duty(level ? 255 : 0);
 		}
-		else {
-			// Sync via direct GPIO write
+		else if (state.syncOutputPin) {
+			// Sync via direct GPIO write. Pin 0 means "no sync output" —
+			// never drive it, since PB0 is MATTER's pull-up input.
 			digitalWrite(state.syncOutputPin, level);
 		}
 		state.flags.syncTickPending = false;

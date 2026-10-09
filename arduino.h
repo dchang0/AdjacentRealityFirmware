@@ -397,12 +397,17 @@ static inline int analogRead(uint8_t pin) {
   ADMUX  = (1 << REFS0) | ch;
   ADCSRB = 0;
   ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1);
+  /* Bounded waits: a real conversion takes ~104us at F_CPU/64.  The guard
+     gives ~6ms of slack and then gives up, because an unbounded spin here
+     would freeze loop() forever (dead buttons, drums stopped) while the
+     ISRs keep running - recoverable only by RESET or power cycle.        */
+  uint16_t guard = 65535;
   /* throwaway conversion to initialise the ADC */
   ADCSRA |= (1 << ADSC);
-  while (ADCSRA & (1 << ADSC)) {}
+  while ((ADCSRA & (1 << ADSC)) && --guard) {}
   /* real conversion */
   ADCSRA |= (1 << ADSC);
-  while (ADCSRA & (1 << ADSC)) {}
+  while ((ADCSRA & (1 << ADSC)) && --guard) {}
   return ADC;
 }
 
