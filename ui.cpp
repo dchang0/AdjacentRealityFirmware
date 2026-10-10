@@ -152,59 +152,76 @@ void detectButtonEdges() {
 // the user hears the confirmation tone while seeing the blink count.
 // ---------------------------------------------------------------------------
 void handleModeTransition() {
-	// Both buttons pressed simultaneously — start transition
+	// Debounce the gesture itself.  readInputs() samples PINB once per
+	// loop() and trusts that single sample outright, so a one-sample
+	// glitch on PB0 landing while SW2 is being pressed fired the whole
+	// transition on the next iteration.  The counter only reaches full
+	// scale on unbroken agreement, which costs a press a few ms and a
+	// glitch everything.  It still degrades gracefully: a stuck input
+	// means "not both held", so it drains and the release fires rather
+	// than latching.
+	static uint8_t bothHeldFilter = 0;
 	if (state.flags.button1 & state.flags.button2) {
-		if (!state.flags.bothButtonsHeld) {
-			// Kill all old voices.
-			// No cli/sei needed: worst case the ISR reads a partially-zeroed
-			// amplitude for one 50us sample — inaudible during a mode transition.
-			Amp[0] = 0; Amp[1] = 0; Amp[2] = 0; Amp[3] = 0;
-			// Reset synth state before playing the cue tone
-			state.distortionAmount = 0;
-			// Autotune's LDR octave mapping writes lightLevel >> 7, which reaches
-			// 4 (not the "0 or 1" the comment claims) — and the button race during
-			// the press runs modeAutotune with only MATTER held, so it lands right
-			// before this transition.  Nothing in mode 2 resets it, so every note
-			// then plays 4 octaves up (Scale[31]>>1 << 4 = 32640 = ~10 kHz) — a
-			// near-ultrasonic, near-silent whine.  Return to the documented default.
-			state.octaveOffset = 2;
-			state.flags.playing = false;
-			// Freeze pitchBend for the cue tone: clear pitchBendActive so
-			// readInputs() sets pitchBend to 0, and set noteDecay to a safe
-			// fixed value so the envelope doesn't wrap or go silent.
-			state.flags.pitchBendActive = false;
-			state.pitchBend = 0;
-			state.noteDecay = 6;
-			// Play the ding for the mode we're about to enter.
-			// cueToneScaleIndex maps (mode+1)%8 to a Scale[] index,
-			// so the pitch tells you which mode is coming next.
-			playCueTone(pgm_read_word(&Scale[pgm_read_byte(&cueToneScaleIndex[(state.mode + 1) % NUM_MODES])]));
-			state.flags.bothButtonsHeld = true;
-			state.flags.transitioning = true;
-			// Blink LED N times for visual confirmation of next mode.
-			// The blocking delay loop is fine here — the cue tone plays
-			// through the 20kHz ISR independently of the main loop.
-			uint8_t nextMode = (state.mode + 1) % NUM_MODES;
-			// 40 ms per half-period: ~250 ms of blinks total, which is what
-			// the watchdog-reset comment below assumes. The old 80-iteration
-			// busy loop lasted ~120 us per half-period — invisible, so the
-			// gesture looked like it did nothing.
-			for (uint8_t i = 0; i <= nextMode; i++) {
-				hal_drum_write(DRUM_SYNC_MASK, DRUM_SYNC_MASK);
-				_delay_ms(40);
-				hal_drum_write(DRUM_SYNC_MASK, 0);
-				_delay_ms(40);
-			}
+		if (bothHeldFilter < BUTTON_FILTER_SAMPLES) bothHeldFilter++;
+	}
+	else if (bothHeldFilter) {
+		bothHeldFilter--;
+	}
+
+	// Both buttons pressed simultaneously — start transition
+	if (bothHeldFilter >= BUTTON_FILTER_SAMPLES && !state.flags.bothButtonsHeld) {
+		// Kill all old voices.
+		// No cli/sei needed: worst case the ISR reads a partially-zeroed
+		// amplitude for one 50us sample — inaudible during a mode transition.
+		Amp[0] = 0; Amp[1] = 0; Amp[2] = 0; Amp[3] = 0;
+		// Reset synth state before playing the cue tone
+		state.distortionAmount = 0;
+		// Autotune's LDR octave mapping writes lightLevel >> 7, which reaches
+		// 4 (not the "0 or 1" the comment claims) — and the button race during
+		// the press runs modeAutotune with only MATTER held, so it lands right
+		// before this transition.  Nothing in mode 2 resets it, so every note
+		// then plays 4 octaves up (Scale[31]>>1 << 4 = 32640 = ~10 kHz) — a
+		// near-ultrasonic, near-silent whine.  Return to the documented default.
+		state.octaveOffset = 2;
+		state.flags.playing = false;
+		// Freeze pitchBend for the cue tone: clear pitchBendActive so
+		// readInputs() sets pitchBend to 0, and set noteDecay to a safe
+		// fixed value so the envelope doesn't wrap or go silent.
+		state.flags.pitchBendActive = false;
+		state.pitchBend = 0;
+		state.noteDecay = 6;
+		// Play the ding for the mode we're about to enter.
+		// cueToneScaleIndex maps (mode+1)%8 to a Scale[] index,
+		// so the pitch tells you which mode is coming next.
+		playCueTone(pgm_read_word(&Scale[pgm_read_byte(&cueToneScaleIndex[(state.mode + 1) % NUM_MODES])]));
+		state.flags.bothButtonsHeld = true;
+		state.flags.transitioning = true;
+		// Blink LED N times for visual confirmation of next mode.
+		// The blocking delay loop is fine here — the cue tone plays
+		// through the 20kHz ISR independently of the main loop.
+		uint8_t nextMode = (state.mode + 1) % NUM_MODES;
+		// 40 ms per half-period: ~250 ms of blinks total, which is what
+		// the watchdog-reset comment below assumes. The old 80-iteration
+		// busy loop lasted ~120 us per half-period — invisible, so the
+		// gesture looked like it did nothing.
+		for (uint8_t i = 0; i <= nextMode; i++) {
+			hal_drum_write(DRUM_SYNC_MASK, DRUM_SYNC_MASK);
+			_delay_ms(40);
+			hal_drum_write(DRUM_SYNC_MASK, 0);
+			_delay_ms(40);
 		}
 	}
 
 	// Both buttons released — complete the transition.
-	// Fires as soon as EITHER button is down (i.e. once they are no longer
-	// both held).  The old condition required both to read low, so a single
-	// stuck or floating input kept bothButtonsHeld latched forever:
-	// transitioning stayed true, selectMode() never ran a mode function and
-	// the unit locked up until RESET.
-	if (state.flags.bothButtonsHeld && !(state.flags.button1 && state.flags.button2)) {
+	// Fires once they are no longer both held, but only after that has been
+	// true for BUTTON_FILTER_SAMPLES consecutive samples — the same filter,
+	// so a bounce on the way up cannot run the transition twice.
+	// "Not both held" still includes one input being stuck, so that case
+	// drains the counter and releases instead of latching: the old
+	// condition required both to read low, which kept bothButtonsHeld set
+	// forever — transitioning stayed true, selectMode() never ran a mode
+	// function and the unit locked up until RESET.
+	if (state.flags.bothButtonsHeld && !bothHeldFilter) {
 		state.flags.bothButtonsHeld = false;
 		state.flags.transitioning = false;
 		state.mode++;

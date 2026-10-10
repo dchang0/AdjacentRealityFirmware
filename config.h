@@ -26,6 +26,12 @@
 #define SYNC_LOCK_COUNT 8
 #define SYNC_TIMEOUT 1000
 #define BUTTON_STUCK_TIMEOUT 400
+// Consecutive loop() samples the both-buttons gesture must persist before
+// it is believed.  readInputs() samples PINB once per iteration and trusts
+// it outright, so a single-sample glitch on PB0 landing during an SW2
+// press fired the whole transition.  A human hold is ~100 ms; a glitch
+// is one sample.
+#define BUTTON_FILTER_SAMPLES 16
 
 // LDR thresholds
 #define LDR_OFFSET 400
